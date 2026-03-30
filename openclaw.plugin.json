@@ -1,0 +1,40 @@
+{
+  "id": "acp-channel",
+  "kind": "channel",
+  "channels": ["acp-channel"],
+  "name": "ACP Channel",
+  "description": "Agent Client Protocol (ACP) channel plugin for programmatic OpenClaw access",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "acp-channel": {
+        "type": "object",
+        "description": "ACP channel configuration",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Enable ACP channel",
+            "default": true
+          },
+          "bridgeUrl": {
+            "type": "string",
+            "description": "ACP bridge server URL",
+            "default": "http://127.0.0.1:3000"
+          },
+          "apiToken": {
+            "type": "string",
+            "description": "API token for authentication between plugin and bridge"
+          },
+          "allowFrom": {
+            "type": "array",
+            "description": "Allowed user IDs for DM security",
+            "items": { "type": "string" },
+            "default": ["default-user"]
+          }
+        }
+      }
+    }
+  }
+}
