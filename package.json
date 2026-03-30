@@ -1,6 +1,6 @@
 {
   "name": "openclaw-acp-channel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "OpenClaw channel plugin for ACP (Agent Client Protocol) interface",
   "type": "module",
   "main": "dist/index.js",
@@ -26,7 +26,9 @@
     "url": "https://github.com/LiboShen/openclaw-acp-channel/issues"
   },
   "openclaw": {
-    "extensions": ["./dist/index.js"],
+    "extensions": [
+      "./dist/index.js"
+    ],
     "setupEntry": "./dist/setup-entry.js",
     "channel": {
       "id": "acp-channel",
@@ -34,7 +36,12 @@
       "blurb": "Exposes OpenClaw via Agent Client Protocol (ACP) standard interface"
     }
   },
-  "keywords": ["openclaw", "acp", "channel", "agent"],
+  "keywords": [
+    "openclaw",
+    "acp",
+    "channel",
+    "agent"
+  ],
   "author": "Libo Shen",
   "license": "MIT",
   "engines": {
