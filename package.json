@@ -37,6 +37,13 @@
   "keywords": ["openclaw", "acp", "channel", "agent"],
   "author": "Libo Shen",
   "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0",
+    "openclaw": ">=2026.3.28"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.28"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.6.0",

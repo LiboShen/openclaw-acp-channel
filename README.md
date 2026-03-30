@@ -2,6 +2,12 @@
 
 Channel plugin that exposes OpenClaw agents via the Agent Client Protocol (ACP) standard interface.
 
+## Requirements
+
+**⚠️ OpenClaw 2026.3.28 or later is required**
+
+This plugin uses the `dispatchInboundDirectDmWithRuntime` API which is only available in OpenClaw 2026.3.28+.
+
 ## Features
 
 - **Programmatic access** - Communicate with OpenClaw agents via STDIO
@@ -34,8 +40,19 @@ OpenClaw Agent
 
 ### Prerequisites
 
-- OpenClaw 2026.3.28 or later
+- **OpenClaw 2026.3.28 or later** (required!)
 - Node.js 18+ (for building from source)
+
+**Check your OpenClaw version:**
+```bash
+openclaw --version
+# Should output: OpenClaw 2026.3.28 or higher
+```
+
+**If you have an older version, upgrade first:**
+```bash
+npm install -g openclaw@latest
+```
 
 ### Install from Source
 
