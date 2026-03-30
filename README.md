@@ -98,11 +98,18 @@ In OpenClaw config (`~/.openclaw/openclaw.json`):
       "enabled": true,
       "bridgeUrl": "http://127.0.0.1:3000",
       "apiToken": "your-secret-token",
-      "allowFrom": ["default-user", "test-user"]
+      "allowFrom": ["*"]  // Open to all (recommended for local bridge)
     }
   }
 }
 ```
+
+### Security Notes
+
+- **Bearer Token** (`apiToken`): The primary security layer. Keep this secret.
+- **allowFrom**: User allowlist. For local bridges, use `["*"]` (open by default).
+  - Only needed if exposing webhook publicly or multi-tenant scenarios
+  - For single-user Flutter app → localhost bridge, `["*"]` is recommended
 
 ## Project Structure
 

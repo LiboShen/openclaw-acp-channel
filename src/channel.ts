@@ -28,7 +28,7 @@ export function resolveAccount(
     accountId: accountId ?? null,
     bridgeUrl: section.bridgeUrl || 'http://127.0.0.1:3000',
     apiToken: section.apiToken || 'default-token',
-    allowFrom: section.allowFrom || ['default-user'],
+    allowFrom: section.allowFrom || ['*'], // Open by default for local bridge
   };
 }
 
