@@ -73,6 +73,11 @@ export const acpChannelPlugin = createChatChannelPlugin<ResolvedAccount>({
     config: {
       resolveAccount,
       inspectAccount,
+      listAccountIds: (cfg: any) => {
+        // Single account channel - return default account or empty
+        const section = cfg.channels?.['acp-channel'];
+        return section ? [null] : [];
+      },
       isConfigured: (account: ResolvedAccount) => Boolean(account.bridgeUrl),
       describeAccount: (account: ResolvedAccount) => ({
         configured: Boolean(account.bridgeUrl),

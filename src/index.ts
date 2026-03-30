@@ -71,8 +71,35 @@ export default defineChannelPluginEntry({
             messageId: payload.messageId,
             timestamp: payload.timestamp || Date.now(),
             deliver: async (replyPayload: any) => {
-              // TODO: Send reply back to bridge
-              console.log(`[acp-channel] Reply: ${replyPayload.text?.substring(0, 50)}...`);
+              // Send reply back to bridge
+              const bridgeUrl = channelConfig?.bridgeUrl || 'http://127.0.0.1:3000';
+              const text = replyPayload.text || '';
+              
+              console.log(`[acp-channel] Sending reply to bridge: ${text.substring(0, 50)}...`);
+              
+              try {
+                const response = await fetch(`${bridgeUrl}/reply`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${expectedToken}`,
+                  },
+                  body: JSON.stringify({
+                    to: payload.from,
+                    text: text,
+                    inReplyTo: payload.messageId,
+                    messageId: `reply-${Date.now()}`,
+                  }),
+                });
+                
+                if (!response.ok) {
+                  console.error(`[acp-channel] Bridge reply failed: ${response.status}`);
+                } else {
+                  console.log(`[acp-channel] ✅ Reply sent to bridge`);
+                }
+              } catch (error) {
+                console.error(`[acp-channel] Failed to send reply to bridge:`, error);
+              }
             },
             onRecordError: (err: unknown) => {
               console.error('[acp-channel] Record error:', err);
