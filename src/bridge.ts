@@ -1,231 +1,375 @@
 #!/usr/bin/env node
 /**
- * ACP Bridge - STDIO ↔ HTTP Bridge
+ * ACP Bridge - Proper JSON-RPC 2.0 Implementation
  * 
- * Bidirectional bridge between ACP clients (STDIO) and OpenClaw (HTTP):
- * 1. Reads ACP messages from STDIN
- * 2. POSTs to OpenClaw webhook
- * 3. Runs HTTP server to receive replies from OpenClaw
- * 4. Writes replies to STDOUT in ACP format
- * 
- * Usage:
- *   node bridge.js
- *   echo '{"role":"user","content":"Hello"}' | node bridge.js
+ * Implements Agent Client Protocol over STDIO using JSON-RPC 2.0:
+ * - initialize: Set up connection
+ * - session/new: Create new session
+ * - session/load: Load existing session
+ * - session/prompt: Send user message
+ * - session/cancel: Cancel ongoing prompt
+ * - session/update: Emit agent responses (notification)
  */
 
-import { createInterface } from 'readline';
+import {
+  AgentSideConnection,
+  ndJsonStream,
+  type Agent,
+  type InitializeRequest,
+  type InitializeResponse,
+  type NewSessionRequest,
+  type NewSessionResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
+  type PromptRequest,
+  type PromptResponse,
+  type CancelNotification,
+  type AuthenticateRequest,
+  type SessionUpdate,
+} from '@agentclientprotocol/sdk';
+import { randomUUID } from 'crypto';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import type { ACPMessage } from './types.js';
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
 // Configuration from environment
-const BRIDGE_PORT = parseInt(process.env.BRIDGE_PORT || '3000');
 const OPENCLAW_WEBHOOK_URL = process.env.OPENCLAW_WEBHOOK_URL || 'http://127.0.0.1:18789/acp-channel/webhook';
 const API_TOKEN = process.env.ACP_API_TOKEN || 'default-token';
 const USER_ID = process.env.ACP_USER_ID || 'default-user';
+const SESSION_DIR = process.env.ACP_SESSION_DIR || join(homedir(), '.openclaw', 'acp-channel-sessions');
+
+mkdirSync(SESSION_DIR, { recursive: true });
+
+interface SessionState {
+  sessionId: string;
+  messages: Array<{ role: string; content: string }>;
+  pendingReply?: {
+    resolve: () => void;
+    reject: (err: Error) => void;
+    cancelled?: boolean;
+  };
+  cancelled?: boolean;
+}
 
 /**
- * Send message to OpenClaw via channel plugin webhook
+ * ACP Agent implementation for OpenClaw channel.
  */
-async function sendToOpenClaw(message: ACPMessage): Promise<void> {
-  const payload = {
-    from: USER_ID,
-    text: message.content,
-    messageId: `msg-${Date.now()}`,
-    timestamp: Date.now(),
-  };
+class OpenClawChannelAgent implements Agent {
+  private conn: AgentSideConnection;
+  private sessions = new Map<string, SessionState>();
+  private initialized = false;
+  private replyServer: any; // HTTP server for receiving replies
+  private replyPort: number = 0;
 
-  try {
-    const response = await fetch(OPENCLAW_WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_TOKEN}`,
+  constructor(conn: AgentSideConnection) {
+    this.conn = conn;
+    this.startReplyServer();
+  }
+
+  private sessionPath(sessionId: string): string {
+    return join(SESSION_DIR, `${sessionId}.json`);
+  }
+
+  private persistSession(session: SessionState): void {
+    writeFileSync(this.sessionPath(session.sessionId), JSON.stringify({
+      sessionId: session.sessionId,
+      messages: session.messages,
+    }, null, 2));
+  }
+
+  private loadPersistedSession(sessionId: string): SessionState | null {
+    const path = this.sessionPath(sessionId);
+    if (!existsSync(path)) return null;
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as { sessionId: string; messages: Array<{ role: string; content: string }> };
+    return {
+      sessionId: raw.sessionId,
+      messages: raw.messages || [],
+    };
+  }
+
+  async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
+    this.initialized = true;
+    
+    return {
+      protocolVersion: 1,
+      agentInfo: {
+        name: 'openclaw-acp-channel',
+        title: 'OpenClaw ACP Channel',
+        version: '0.3.0',
       },
-      body: JSON.stringify(payload),
+      agentCapabilities: {
+        loadSession: true,
+      },
+    };
+  }
+
+  async newSession(_params: NewSessionRequest): Promise<NewSessionResponse> {
+    const sessionId = randomUUID();
+
+    const session: SessionState = {
+      sessionId,
+      messages: [],
+    };
+
+    this.sessions.set(sessionId, session);
+    this.persistSession(session);
+
+    return { sessionId };
+  }
+
+  async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    const { sessionId } = params;
+    if (!sessionId) {
+      throw new Error('sessionId required');
+    }
+
+    // Get from memory or disk
+    let session = this.sessions.get(sessionId) || this.loadPersistedSession(sessionId);
+    if (!session) {
+      session = {
+        sessionId,
+        messages: [],
+      };
+    }
+    this.sessions.set(sessionId, session);
+
+    // Replay assistant history as session updates
+    for (const msg of session.messages) {
+      if (msg.role === 'assistant') {
+        await this.conn.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: {
+              type: 'text',
+              text: msg.content,
+            },
+          },
+        });
+      }
+    }
+
+    return {};
+  }
+
+  async prompt(params: PromptRequest): Promise<PromptResponse> {
+    const { sessionId, prompt } = params;
+    if (!sessionId) {
+      throw new Error('sessionId required');
+    }
+
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    // Extract text from prompt content
+    const text = this.extractPromptText(prompt);
+    if (!text) {
+      throw new Error('Empty prompt');
+    }
+
+    // Store user message
+    session.messages.push({ role: 'user', content: text });
+    session.cancelled = false;
+    this.persistSession(session);
+
+    // Send to OpenClaw webhook
+    try {
+      const messageId = `msg-${Date.now()}`;
+      const bridgeUrl = `http://127.0.0.1:${this.replyPort}`;
+
+      // Register pending reply BEFORE sending, to avoid race if reply arrives fast
+      const replyPromise = new Promise<void>((resolve, reject) => {
+        session.pendingReply = { resolve, reject, cancelled: false };
+
+        setTimeout(() => {
+          if (session.pendingReply) {
+            delete session.pendingReply;
+            reject(new Error('Timeout waiting for reply'));
+          }
+        }, 60000);
+      });
+
+      const response = await fetch(OPENCLAW_WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${API_TOKEN}`,
+        },
+        body: JSON.stringify({
+          from: USER_ID,
+          text,
+          messageId,
+          sessionId,
+          bridgeUrl,
+          timestamp: Date.now(),
+        }),
+      });
+
+      if (!response.ok) {
+        delete session.pendingReply;
+        throw new Error(`Webhook failed: ${response.status}`);
+      }
+
+      // Wait for reply from OpenClaw (via POST to /reply endpoint)
+      await replyPromise;
+
+      return { stopReason: session.cancelled ? 'cancelled' : 'end_turn' };
+    } catch (error) {
+      console.error('[bridge] Error sending to OpenClaw:', error);
+      throw new Error('Failed to send prompt to OpenClaw');
+    }
+  }
+
+  async cancel(params: CancelNotification): Promise<void> {
+    const sessionId = params.sessionId;
+    if (!sessionId) return;
+
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    console.error('[bridge] Cancel requested for session:', sessionId);
+    session.cancelled = true;
+
+    // Best-effort local cancel: resolve pending prompt immediately.
+    // We currently do not propagate abort into OpenClaw core.
+    if (session.pendingReply) {
+      session.pendingReply.cancelled = true;
+      session.pendingReply.resolve();
+      delete session.pendingReply;
+    }
+  }
+
+  async authenticate(_params: AuthenticateRequest): Promise<void> {
+    // No-op - authentication handled via API token
+  }
+
+  private startReplyServer(): void {
+    this.replyServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method === 'POST' && req.url === '/reply') {
+        try {
+          // Read body
+          const chunks: Buffer[] = [];
+          for await (const chunk of req) {
+            chunks.push(chunk as Buffer);
+          }
+          const body = Buffer.concat(chunks).toString();
+          const reply = JSON.parse(body);
+
+          // Find session
+          const session = Array.from(this.sessions.values()).find(s => 
+            reply.sessionId === s.sessionId || reply.to === USER_ID
+          );
+
+          if (session && reply.text) {
+            // If session was cancelled, swallow late reply and do not emit it.
+            if (!session.cancelled) {
+              session.messages.push({ role: 'assistant', content: reply.text });
+              this.persistSession(session);
+
+              await this.conn.sessionUpdate({
+                sessionId: session.sessionId,
+                update: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: {
+                    type: 'text',
+                    text: reply.text,
+                  },
+                },
+              });
+            }
+
+            if (session.pendingReply) {
+              session.pendingReply.resolve();
+              delete session.pendingReply;
+            }
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch (error) {
+          console.error('[bridge] Error handling reply:', error);
+          res.writeHead(500);
+          res.end();
+        }
+      } else {
+        res.writeHead(404);
+        res.end();
+      }
     });
 
-    if (!response.ok) {
-      throw new Error(`Webhook failed: ${response.status} ${response.statusText}`);
-    }
-
-    console.error(`[bridge] ✅ Message sent to OpenClaw`);
-  } catch (error) {
-    console.error(`[bridge] ❌ Error sending to OpenClaw:`, error);
-    throw error;
+    // Bind to dynamic port (0 = choose available port)
+    this.replyServer.listen(0, '127.0.0.1', () => {
+      const addr = this.replyServer.address();
+      this.replyPort = addr.port;
+      console.error(`[bridge] Reply server listening on http://127.0.0.1:${this.replyPort}/reply`);
+    });
   }
-}
 
-/**
- * Process ACP message from STDIN
- */
-async function processMessage(line: string): Promise<void> {
-  try {
-    const message: ACPMessage = JSON.parse(line);
-    
-    if (!message.role || !message.content) {
-      console.error('[bridge] Invalid message format:', line);
-      return;
-    }
+  private extractPromptText(prompt: unknown): string | null {
+    if (!Array.isArray(prompt)) return null;
 
-    if (message.role === 'user') {
-      // Forward user message to OpenClaw
-      await sendToOpenClaw(message);
-    } else {
-      console.error(`[bridge] Ignoring non-user message: ${message.role}`);
-    }
-  } catch (error) {
-    console.error('[bridge] Error processing message:', error);
-  }
-}
-
-/**
- * Write reply to STDOUT in ACP format
- */
-function writeReplyToStdout(text: string): void {
-  const reply: ACPMessage = {
-    role: 'assistant',
-    content: text,
-  };
-  
-  // Write to STDOUT (not STDERR)
-  process.stdout.write(JSON.stringify(reply) + '\n');
-  console.error(`[bridge] ✅ Reply written to STDOUT`);
-}
-
-/**
- * Read request body
- */
-async function readBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
-  }
-  return Buffer.concat(chunks).toString();
-}
-
-/**
- * Create HTTP server to receive replies from OpenClaw
- */
-function createBridgeServer() {
-  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS headers
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(200);
-      res.end();
-      return;
-    }
-
-    // Health check endpoint
-    if (req.method === 'GET' && req.url === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', bridge: 'acp-channel' }));
-      return;
-    }
-
-    // Reply endpoint - receives replies from OpenClaw
-    if (req.method === 'POST' && req.url === '/reply') {
-      try {
-        // Verify auth token
-        const authHeader = req.headers.authorization;
-        if (authHeader !== `Bearer ${API_TOKEN}`) {
-          console.error(`[bridge] Unauthorized reply attempt`);
-          res.writeHead(401, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'Unauthorized' }));
-          return;
+    const texts: string[] = [];
+    for (const item of prompt) {
+      if (typeof item === 'object' && item !== null) {
+        const content = item as Record<string, unknown>;
+        if (content.type === 'text' && typeof content.text === 'string') {
+          texts.push(content.text);
         }
-
-        // Parse reply
-        const body = await readBody(req);
-        const reply = JSON.parse(body);
-        
-        console.error(`[bridge] 📥 Received reply from OpenClaw: ${reply.text?.substring(0, 50)}...`);
-        
-        // Write to STDOUT in ACP format
-        writeReplyToStdout(reply.text);
-        
-        // Respond to OpenClaw
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true }));
-      } catch (error) {
-        console.error(`[bridge] Error processing reply:`, error);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Internal server error' }));
       }
-      return;
     }
 
-    // 404 for other routes
-    res.writeHead(404);
-    res.end();
-  });
-
-  server.listen(BRIDGE_PORT, '127.0.0.1', () => {
-    console.error(`[bridge] 🌉 HTTP server listening on http://127.0.0.1:${BRIDGE_PORT}`);
-    console.error(`[bridge] Ready to receive replies from OpenClaw at /reply`);
-  });
-
-  return server;
+    return texts.join('\n') || null;
+  }
 }
 
 /**
- * Setup STDIN reader
+ * Start the ACP server (STDIO only, no HTTP port).
  */
-function setupStdinReader() {
-  console.error('[bridge] 📖 Reading from STDIN...');
-
-  const rl = createInterface({
-    input: process.stdin,
-    terminal: false,
-  });
-
-  rl.on('line', async (line) => {
-    if (line.trim()) {
-      await processMessage(line);
-    }
-  });
-
-  rl.on('close', () => {
-    console.error('[bridge] STDIN closed, exiting...');
-    process.exit(0);
-  });
-}
-
-/**
- * Main entry point
- */
-function main() {
-  console.error('[bridge] 🚀 ACP Bridge starting...');
+function startServer(): void {
+  console.error('[bridge] Starting OpenClaw ACP Channel bridge...');
   console.error(`[bridge] OpenClaw webhook: ${OPENCLAW_WEBHOOK_URL}`);
   console.error(`[bridge] User ID: ${USER_ID}`);
-  console.error(`[bridge] Bridge port: ${BRIDGE_PORT}`);
 
-  // Start HTTP server to receive replies
-  const server = createBridgeServer();
-
-  // Start reading from STDIN
-  setupStdinReader();
-
-  // Handle process termination
-  process.on('SIGINT', () => {
-    console.error('[bridge] Received SIGINT, shutting down...');
-    server.close();
-    process.exit(0);
+  // Create stdio streams
+  const output = new WritableStream<Uint8Array>({
+    write(chunk) {
+      process.stdout.write(chunk);
+    },
   });
 
+  const input = new ReadableStream<Uint8Array>({
+    start(controller) {
+      process.stdin.on('data', (chunk) => controller.enqueue(new Uint8Array(chunk)));
+      process.stdin.on('end', () => controller.close());
+      process.stdin.on('error', (err) => controller.error(err));
+    },
+  });
+
+  // Create ACP connection
+  const stream = ndJsonStream(output, input);
+  new AgentSideConnection((conn) => new OpenClawChannelAgent(conn), stream);
+
+  // Keep stdin open
+  process.stdin.resume();
+
+  // Handle signals
+  process.on('SIGINT', () => {
+    console.error('[bridge] Received SIGINT, exiting...');
+    process.exit(0);
+  });
+  
   process.on('SIGTERM', () => {
-    console.error('[bridge] Received SIGTERM, shutting down...');
-    server.close();
+    console.error('[bridge] Received SIGTERM, exiting...');
     process.exit(0);
   });
 }
 
 // Run if executed directly
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main();
+  startServer();
 }
 
-export { sendToOpenClaw, processMessage, createBridgeServer, writeReplyToStdout };
+export { OpenClawChannelAgent, startServer };

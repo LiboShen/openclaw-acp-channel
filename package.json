@@ -15,6 +15,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:acp": "node test/acp-jsonrpc-e2e.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
@@ -57,5 +58,7 @@
     "typescript": "^5.6.0",
     "vitest": "^2.1.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.17.1"
+  }
 }

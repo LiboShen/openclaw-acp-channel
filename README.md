@@ -10,12 +10,12 @@ This plugin uses the `dispatchInboundDirectDmWithRuntime` API which is only avai
 
 ## Features
 
-- **Programmatic access** - Communicate with OpenClaw agents via STDIO
-- **ACP protocol** - Standard interface for agent communication
-- **HTTP webhook** - Receive messages from ACP clients
-- **Local bridge** - Connect client apps to OpenClaw over localhost
-- **Session management** - Multi-round conversations with context
-- **Security** - Bearer token authentication
+- **ACP JSON-RPC over STDIO** - Real ACP protocol, not a custom line format
+- **HTTP webhook dispatch** - Bridge forwards prompts into OpenClaw
+- **Dynamic callback port** - Avoids fixed-port collisions across multiple processes
+- **Session management** - `session/new`, `session/load`, `session/prompt`, `session/cancel`
+- **Session replay** - Persisted session history supports `session/load`
+- **Security** - Bearer token authentication between bridge and plugin
 
 ## Use Cases
 
@@ -73,7 +73,7 @@ openclaw plugins install .
 
 ## Configuration
 
-Add to your OpenClaw config file (`~/.openclaw/openclaw.json` or `/etc/openclaw.json`):
+Add to your OpenClaw config file (`~/.openclaw/openclaw.json` or your `OPENCLAW_CONFIG_PATH`):
 
 ```json
 {
@@ -98,8 +98,8 @@ Add to your OpenClaw config file (`~/.openclaw/openclaw.json` or `/etc/openclaw.
 
 ### Configuration Options
 
-- **apiToken** (required): Bearer token for webhook authentication
-- **bridgeUrl** (optional): URL where bridge server receives replies (default: `http://127.0.0.1:3000`)
+- **apiToken** (required): Bearer token for bridge ↔ plugin authentication
+- **bridgeUrl** (optional): fallback reply URL. In normal operation the bridge sends a per-request dynamic `bridgeUrl`, which overrides this value.
 - **allowFrom** (optional): User ID allowlist (default: `["*"]` - open to all)
 
 ### Security Notes
@@ -119,30 +119,37 @@ openclaw gateway
 
 The webhook will be available at: `http://localhost:18789/acp-channel/webhook`
 
-### 2. Send Messages to Agent
-
-POST messages to the webhook:
+### 2. Run the ACP Bridge
 
 ```bash
-curl -X POST http://localhost:18789/acp-channel/webhook \
-  -H "Authorization: Bearer your-secret-token-here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "user-123",
-    "text": "Hello, what is 2+2?",
-    "messageId": "msg-001"
-  }'
+ACP_API_TOKEN=your-secret-token-here node dist/bridge.js
 ```
 
-### 3. Implement ACP Bridge
+The bridge speaks ACP JSON-RPC over STDIO.
 
-Create a bridge server that:
-1. Receives messages from your client app via STDIO (ACP protocol)
-2. POSTs them to the OpenClaw webhook
-3. Receives replies from OpenClaw
-4. Sends replies back to client via STDIO
+### 3. Send ACP JSON-RPC
 
-See `src/bridge.ts` for a reference implementation.
+Example `initialize`:
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"client","version":"0.1.0"}}}
+```
+
+Example `session/new`:
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":"/tmp","mcpServers":[]}}
+```
+
+Example `session/prompt`:
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"<session-id>","prompt":[{"type":"text","text":"Hello"}]}}
+```
+
+The bridge emits `session/update` notifications and returns a `session/prompt` result with `stopReason`.
+
+See `src/bridge.ts` for the reference implementation and `test/acp-jsonrpc-e2e.mjs` for a working end-to-end example.
 
 ## Development
 
@@ -176,12 +183,13 @@ openclaw-acp-channel/
 
 ## How It Works
 
-1. **Client app** sends ACP message via STDIO to bridge
-2. **Bridge** POSTs message to OpenClaw webhook with Bearer token
-3. **Plugin** receives message, validates token, checks allowFrom
-4. **OpenClaw agent** processes message, generates response
-5. **Plugin** calls bridge API with reply
-6. **Bridge** sends reply to client via STDIO
+1. **Client app** sends ACP JSON-RPC via STDIO to bridge
+2. **Bridge** handles `initialize` / `session/*` methods
+3. **Bridge** POSTs prompt text to OpenClaw webhook with Bearer token
+4. **Plugin** receives message, validates token, dispatches into OpenClaw
+5. **OpenClaw agent** processes message and generates response
+6. **Plugin** POSTs reply to the bridge callback URL
+7. **Bridge** emits ACP `session/update` and resolves `session/prompt`
 
 ## License
 

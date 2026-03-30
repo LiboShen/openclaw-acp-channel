@@ -1,186 +1,179 @@
-# OpenClaw ACP Channel - Architecture
+# OpenClaw ACP Channel Architecture
 
-## Current Problem
+## Overview
 
-The current implementation is **incomplete and broken**:
+`openclaw-acp-channel` connects ACP-compatible clients to OpenClaw through a channel plugin.
 
-1. ❌ Bridge only sends messages TO OpenClaw (one-way)
-2. ❌ Bridge doesn't receive replies FROM OpenClaw
-3. ❌ No HTTP server to receive replies
-4. ❌ No tests with actual STDIO communication
-5. ❌ Plugin reads config from wrong path
+It has two parts:
 
-## Correct Architecture
+1. **ACP Bridge** (`src/bridge.ts`)
+   - Speaks **ACP JSON-RPC over STDIO** to the client
+   - Translates ACP requests into webhook calls to OpenClaw
+   - Receives replies from OpenClaw and emits ACP `session/update` notifications
 
-```
-┌─────────────────┐
-│  Client App     │  (Flutter, CLI, etc.)
-│  (ACP STDIO)    │
-└────────┬────────┘
-         │ STDIN: {"role":"user","content":"Hello"}
-         │ STDOUT: {"role":"assistant","content":"Hi!"}
-         ↓
-┌─────────────────┐
-│  Bridge Server  │  (Node.js - THIS PACKAGE)
-│  - Read STDIN   │
-│  - HTTP Server  │
-│  - Write STDOUT │
-└────────┬────────┘
-         │ HTTP POST /webhook
-         │ {"from":"user","text":"Hello","messageId":"..."}
-         ↓
-┌─────────────────┐
-│ OpenClaw Plugin │  (Webhook handler)
-│  (acp-channel)  │
-└────────┬────────┘
-         │ dispatch message
-         ↓
-┌─────────────────┐
-│ OpenClaw Agent  │
-│    (LLM)        │
-└────────┬────────┘
-         │ generate reply
-         ↓
-┌─────────────────┐
-│ OpenClaw Plugin │
-│  (deliver cb)   │
-└────────┬────────┘
-         │ HTTP POST /reply
-         │ {"to":"user","text":"Hi!","inReplyTo":"..."}
-         ↓
-┌─────────────────┐
-│  Bridge Server  │
-│  - Receive HTTP │
-│  - Write STDOUT │
-└────────┬────────┘
-         │ STDOUT: {"role":"assistant","content":"Hi!"}
-         ↓
-┌─────────────────┐
-│  Client App     │
-│  (reads STDOUT) │
-└─────────────────┘
+2. **OpenClaw Channel Plugin** (`src/index.ts`, `src/channel.ts`)
+   - Exposes webhook endpoint: `/acp-channel/webhook`
+   - Dispatches inbound messages into OpenClaw runtime
+   - Sends replies back to the bridge callback URL
+
+## Data Flow
+
+```text
+ACP Client
+  ⇅ STDIO (JSON-RPC)
+ACP Bridge
+  ⇅ HTTP POST
+OpenClaw Channel Plugin
+  ⇅ Runtime dispatch
+OpenClaw Agent
 ```
 
-## Components
+## Protocol Flow
 
-### 1. Bridge Server (src/bridge.ts)
+### 1. Initialization
+Client sends:
+- `initialize`
 
-**Responsibilities:**
-- Run HTTP server on port 3000 (configurable)
-- Read ACP messages from STDIN
-- POST messages to OpenClaw webhook
-- Receive replies on HTTP endpoint `/reply`
-- Write replies to STDOUT in ACP format
-- Handle errors and logging
+Bridge responds with:
+- protocol version
+- agent info
+- capabilities
 
-**Interface:**
-```typescript
-// STDIN (from client)
-{"role":"user","content":"What is 2+2?"}
+### 2. Session lifecycle
+Client sends:
+- `session/new`
+- `session/load`
+- `session/prompt`
+- `session/cancel`
 
-// POST to OpenClaw webhook
-POST http://localhost:18789/acp-channel/webhook
-{"from":"user-123","text":"What is 2+2?","messageId":"msg-001"}
+Bridge emits:
+- `session/update`
 
-// Receive from OpenClaw
-POST http://localhost:3000/reply
-{"to":"user-123","text":"4","inReplyTo":"msg-001"}
+### 3. Prompt execution
+1. Client sends `session/prompt`
+2. Bridge extracts text from ACP content blocks
+3. Bridge POSTs to OpenClaw webhook
+4. Plugin dispatches message into OpenClaw
+5. OpenClaw generates reply
+6. Plugin POSTs reply to bridge callback URL
+7. Bridge emits `session/update`
+8. Bridge returns `session/prompt` result with `stopReason`
 
-// STDOUT (to client)
-{"role":"assistant","content":"4"}
+## Session Identity
+
+Each ACP session has a stable `sessionId`.
+
+The bridge includes `sessionId` in webhook payloads, and the plugin derives a sender key from:
+
+```text
+{userId}::{sessionId}
 ```
 
-### 2. OpenClaw Plugin (src/index.ts + src/channel.ts)
+This ensures different ACP sessions do not collide inside OpenClaw.
 
-**Responsibilities:**
-- Register webhook endpoint at `/acp-channel/webhook`
-- Authenticate requests with Bearer token
-- Dispatch messages to OpenClaw agent
-- Receive agent replies in `deliver()` callback
-- POST replies back to bridge server at `{bridgeUrl}/reply`
+## Reply Callback
 
-**Config:**
+The bridge starts a small HTTP callback server on an **ephemeral port**.
+
+For each prompt it includes:
+
 ```json
 {
-  "channels": {
-    "acp-channel": {
-      "enabled": true,
-      "apiToken": "secret-token",
-      "bridgeUrl": "http://127.0.0.1:3000",
-      "allowFrom": ["*"]
-    }
-  }
+  "bridgeUrl": "http://127.0.0.1:<dynamic-port>",
+  "sessionId": "..."
 }
 ```
 
-## Testing Strategy (TDD)
+The plugin sends replies to:
 
-### Test 1: Bridge STDIO Communication
-```bash
-# Test: Send message via STDIN, receive on STDOUT
-echo '{"role":"user","content":"test"}' | node dist/bridge.js
-
-Expected:
-- Bridge POSTs to webhook
-- Bridge receives reply
-- Bridge writes to STDOUT: {"role":"assistant","content":"..."}
+```text
+POST {bridgeUrl}/reply
 ```
 
-### Test 2: Plugin Webhook
-```bash
-# Test: POST to webhook, verify dispatch
-curl -X POST http://localhost:18789/acp-channel/webhook \
-  -H "Authorization: Bearer token" \
-  -d '{"from":"user","text":"test","messageId":"m1"}'
+This avoids fixed-port collisions when multiple bridge processes run concurrently.
 
-Expected:
-- Message authenticated
-- Message dispatched to agent
-- Reply POSTed back to bridge
+## Persistence
+
+The bridge persists ACP session state to:
+
+```text
+~/.openclaw/acp-channel-sessions/
 ```
 
-### Test 3: End-to-End with Bridge Server
-```bash
-# Start bridge in background
-node dist/bridge.js &
+Persisted data:
+- sessionId
+- assistant/user message history
 
-# Send via STDIN
-echo '{"role":"user","content":"What is 2+2?"}' > /tmp/input.txt
-cat /tmp/input.txt | node dist/bridge.js
+This allows:
+- `session/load` replay on a new bridge process
+- continuity across process restarts
 
-Expected:
-- Full round-trip
-- Reply received on STDOUT
+## Cancellation Model
+
+`session/cancel` is implemented as **bridge-side cancellation**:
+- pending ACP prompt resolves with `stopReason: "cancelled"`
+- late replies from OpenClaw are ignored for that prompt
+
+This gives correct ACP behavior to the client even if upstream OpenClaw work is not forcibly aborted.
+
+## Supported ACP Methods
+
+### Implemented
+- `initialize`
+- `session/new`
+- `session/load`
+- `session/prompt`
+- `session/cancel`
+- `session/update` notifications
+
+## Message Formats
+
+### ACP request example
+```json
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"client","version":"0.1.0"}}}
 ```
 
-## Implementation Plan (TDD)
+### ACP prompt example
+```json
+{"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":"abc","prompt":[{"type":"text","text":"Hello"}]}}
+```
 
-1. **Write test for bridge STDIO** (fails - no server)
-2. **Implement bridge HTTP server** (test passes)
-3. **Write test for webhook → agent → reply** (fails - wrong config path)
-4. **Fix plugin config reading** (test passes)
-5. **Write end-to-end test** (fails - integration issues)
-6. **Fix integration issues** (test passes)
-7. **Verify on Sprites testbed**
-8. **Publish v0.2.0**
+### ACP update example
+```json
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"abc","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello back"}}}}
+```
 
-## Key Fixes Needed
+## Testing Strategy
 
-1. ✅ Bridge needs HTTP server to receive replies
-2. ✅ Plugin must read config from OPENCLAW_CONFIG_PATH
-3. ✅ Add proper error handling
-4. ✅ Write actual tests with STDIO
-5. ✅ Document bridge server requirements
-6. ✅ Test full flow before publishing
+### Manual
+- interactive ACP JSON-RPC over STDIO
+- verify `initialize`, `session/new`, `session/prompt`, `session/load`, `session/cancel`
 
-## Why Previous Versions Failed
+### Automated
+- `test/acp-jsonrpc-e2e.mjs`
+  - initialize
+  - new session
+  - prompt
+  - load session replay
+  - cancel prompt
 
-- **v0.1.0**: deliver() was TODO stub - never sent replies
-- **v0.1.1**: Added version requirements but still broken
-- **v0.1.2**: Fixed deliver() but:
-  - Bridge has no HTTP server to receive replies
-  - Plugin reads wrong config path
-  - No end-to-end tests
-  - Never actually tested with STDIO
+## Operational Notes
 
-**v0.2.0 will be the first actually working version with proper tests.**
+- Bridge uses dynamic callback port per process
+- Plugin uses request-scoped `bridgeUrl`
+- Plugin reads OpenClaw config from `OPENCLAW_CONFIG_PATH` or default config path
+- Config parsing supports JSONC-style `//` comments
+
+## Install Modes
+
+### From GitHub
+```bash
+npm install github:LiboShen/openclaw-acp-channel
+```
+
+### From NPM
+```bash
+npm install openclaw-acp-channel
+```
+
+The package uses `prepare` so GitHub installs build automatically.

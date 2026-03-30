@@ -36,7 +36,7 @@ describe('ACP Channel Plugin', () => {
 
       expect(account.bridgeUrl).toBe('http://127.0.0.1:3000');
       expect(account.apiToken).toBe('default-token');
-      expect(account.allowFrom).toEqual(['default-user']);
+      expect(account.allowFrom).toEqual(['*']);
     });
 
     it('should throw when section is missing', () => {

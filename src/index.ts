@@ -59,11 +59,13 @@ export default defineChannelPluginEntry({
             chunks.push(chunk);
           }
           const body = Buffer.concat(chunks).toString();
-          const payload: WebhookPayload = JSON.parse(body);
+          const payload: WebhookPayload & { bridgeUrl?: string; sessionId?: string } = JSON.parse(body);
           
           console.log(`[acp-channel] ✅ Received message from ${payload.from}: ${payload.text.substring(0, 50)}...`);
           
           // Dispatch to OpenClaw using the proper SDK function
+          const senderKey = payload.sessionId ? `${payload.from}::${payload.sessionId}` : payload.from;
+
           await dispatchInboundDirectDmWithRuntime({
             cfg: config,
             runtime: api.runtime,
@@ -71,16 +73,16 @@ export default defineChannelPluginEntry({
             channelLabel: 'ACP Channel',
             accountId: null,
             peer: { type: 'dm' },
-            senderId: payload.from,
-            senderAddress: payload.from,
+            senderId: senderKey,
+            senderAddress: senderKey,
             recipientAddress: 'agent',
-            conversationLabel: `DM with ${payload.from}`,
+            conversationLabel: payload.sessionId ? `ACP session ${payload.sessionId}` : `DM with ${payload.from}`,
             rawBody: payload.text,
             messageId: payload.messageId,
             timestamp: payload.timestamp || Date.now(),
             deliver: async (replyPayload: any) => {
-              // Send reply back to bridge
-              const bridgeUrl = channelConfig?.bridgeUrl || 'http://127.0.0.1:3000';
+              // Send reply back to bridge. Prefer per-request callback URL to avoid port collisions.
+              const bridgeUrl = payload.bridgeUrl || channelConfig?.bridgeUrl || 'http://127.0.0.1:3000';
               const text = replyPayload.text || '';
               
               console.log(`[acp-channel] Sending reply to bridge: ${text.substring(0, 50)}...`);
@@ -97,6 +99,7 @@ export default defineChannelPluginEntry({
                     text: text,
                     inReplyTo: payload.messageId,
                     messageId: `reply-${Date.now()}`,
+                    sessionId: payload.sessionId,
                   }),
                 });
                 
