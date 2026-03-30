@@ -29,9 +29,17 @@ export default defineChannelPluginEntry({
       
       handler: async (req: any, res: any) => {
         try {
-          // Load config directly
-          const configPath = join(homedir(), '.openclaw', 'openclaw.json');
-          const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+          // Read config from file (respects OPENCLAW_CONFIG_PATH env var)
+          const configPath = process.env.OPENCLAW_CONFIG_PATH || join(homedir(), '.openclaw', 'openclaw.json');
+          let configContent = readFileSync(configPath, 'utf-8');
+          
+          // Strip // comments (JSONC format)
+          configContent = configContent
+            .split('\n')
+            .filter(line => !line.trim().startsWith('//'))
+            .join('\n');
+          
+          const config = JSON.parse(configContent);
           const channelConfig = config?.channels?.['acp-channel'];
           const expectedToken = channelConfig?.apiToken || 'default-token';
           
