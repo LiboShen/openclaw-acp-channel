@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/acp-channel",
+  "name": "openclaw-acp-channel",
   "version": "0.1.0",
   "description": "OpenClaw channel plugin for ACP (Agent Client Protocol) interface",
   "type": "module",
