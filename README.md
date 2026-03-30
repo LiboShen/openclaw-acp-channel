@@ -8,7 +8,7 @@ Provides a programmatic way to communicate with OpenClaw agents via STDIO using 
 
 - **Skills testing framework** - Test agent behaviors programmatically
 - **External integrations** - Connect any ACP-compatible client
-- **Flutter app** - Mobile/desktop chat interface
+- **Mobile/desktop apps** - Chat interfaces and agent UIs
 - **Automation** - Script agent interactions
 
 ## Architecture
@@ -109,7 +109,7 @@ In OpenClaw config (`~/.openclaw/openclaw.json`):
 - **Bearer Token** (`apiToken`): The primary security layer. Keep this secret.
 - **allowFrom**: User allowlist. For local bridges, use `["*"]` (open by default).
   - Only needed if exposing webhook publicly or multi-tenant scenarios
-  - For single-user Flutter app → localhost bridge, `["*"]` is recommended
+  - For single-user apps with localhost bridge, `["*"]` is recommended
 
 ## Project Structure
 
