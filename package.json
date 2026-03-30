@@ -5,11 +5,25 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LiboShen/openclaw-acp-channel.git"
+  },
+  "homepage": "https://github.com/LiboShen/openclaw-acp-channel#readme",
+  "bugs": {
+    "url": "https://github.com/LiboShen/openclaw-acp-channel/issues"
   },
   "openclaw": {
     "extensions": ["./dist/index.js"],
@@ -21,7 +35,7 @@
     }
   },
   "keywords": ["openclaw", "acp", "channel", "agent"],
-  "author": "",
+  "author": "Libo Shen",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^22.0.0",
