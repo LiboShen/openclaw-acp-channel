@@ -1,12 +1,19 @@
 # OpenClaw ACP Channel Plugin
 
-Channel plugin that exposes OpenClaw via the Agent Client Protocol (ACP) standard interface.
+Channel plugin that exposes OpenClaw agents via the Agent Client Protocol (ACP) standard interface.
 
-## Purpose
+## Features
 
-Provides a programmatic way to communicate with OpenClaw agents via STDIO using the ACP protocol:
+- **Programmatic access** - Communicate with OpenClaw agents via STDIO
+- **ACP protocol** - Standard interface for agent communication
+- **HTTP webhook** - Receive messages from ACP clients
+- **Local bridge** - Connect client apps to OpenClaw over localhost
+- **Session management** - Multi-round conversations with context
+- **Security** - Bearer token authentication
 
-- **Skills testing framework** - Test agent behaviors programmatically
+## Use Cases
+
+- **Skills testing** - Test agent behaviors programmatically
 - **External integrations** - Connect any ACP-compatible client
 - **Mobile/desktop apps** - Chat interfaces and agent UIs
 - **Automation** - Script agent interactions
@@ -14,141 +21,150 @@ Provides a programmatic way to communicate with OpenClaw agents via STDIO using 
 ## Architecture
 
 ```
-ACP Client (any process)
+ACP Client App
     ↕ STDIO (ACP protocol)
-ACP Bridge (TypeScript)
-    ↕ HTTP (localhost)
-OpenClaw Channel Plugin
+ACP Bridge Server
+    ↕ HTTP POST (localhost)
+OpenClaw Channel Plugin (webhook)
     ↕
-OpenClaw Core (agent)
+OpenClaw Agent
 ```
 
-## Development Workflow
+## Installation
 
-### Initial Setup
+### Prerequisites
+
+- OpenClaw 2026.3.28 or later
+- Node.js 18+ (for building from source)
+
+### Install from Source
 
 ```bash
-cd ~/data/workspace/openclaw-acp-channel
+# Clone repository
+git clone https://github.com/LiboShen/openclaw-acp-channel.git
+cd openclaw-acp-channel
+
+# Install dependencies
 npm install
-```
 
-### Build & Sync
-
-```bash
-# Build TypeScript
+# Build
 npm run build
 
-# Sync to Sprites testbed
-npm run sync
-
-# Sync + install in OpenClaw
-npm run sync:install
+# Install plugin
+openclaw plugins install .
 ```
-
-### Testing
-
-```bash
-# Run unit tests locally
-npm test
-
-# Test in Sprites (integration)
-npm run test:remote
-
-# Check status
-./scripts/status.sh
-
-# View logs
-npm run logs
-```
-
-### Iteration Loop
-
-```bash
-# 1. Edit code locally
-vim src/channel.ts
-
-# 2. Build & sync
-npm run sync:install
-
-# 3. Test
-npm run test:remote
-
-# 4. Check logs
-npm run logs
-```
-
-## Scripts
-
-- `npm run build` - Build TypeScript
-- `npm run sync` - Sync files to Sprites
-- `npm run sync:install` - Sync + install plugin
-- `npm run test:remote` - Run integration test in Sprites
-- `npm run logs` - Stream OpenClaw logs
-- `./scripts/status.sh` - Check plugin status
-- `./scripts/uninstall.sh` - Uninstall plugin
 
 ## Configuration
 
-In OpenClaw config (`~/.openclaw/openclaw.json`):
+Add to your OpenClaw config file (`~/.openclaw/openclaw.json` or `/etc/openclaw.json`):
 
 ```json
 {
+  "plugins": {
+    "allow": ["acp-channel"],
+    "entries": {
+      "acp-channel": {
+        "enabled": true
+      }
+    }
+  },
   "channels": {
     "acp-channel": {
       "enabled": true,
+      "apiToken": "your-secret-token-here",
       "bridgeUrl": "http://127.0.0.1:3000",
-      "apiToken": "your-secret-token",
-      "allowFrom": ["*"]  // Open to all (recommended for local bridge)
+      "allowFrom": ["*"]
     }
   }
 }
 ```
 
+### Configuration Options
+
+- **apiToken** (required): Bearer token for webhook authentication
+- **bridgeUrl** (optional): URL where bridge server receives replies (default: `http://127.0.0.1:3000`)
+- **allowFrom** (optional): User ID allowlist (default: `["*"]` - open to all)
+
 ### Security Notes
 
-- **Bearer Token** (`apiToken`): The primary security layer. Keep this secret.
-- **allowFrom**: User allowlist. For local bridges, use `["*"]` (open by default).
-  - Only needed if exposing webhook publicly or multi-tenant scenarios
-  - For single-user apps with localhost bridge, `["*"]` is recommended
+For localhost bridges:
+- **apiToken**: Primary security - keep this secret between your app and OpenClaw
+- **allowFrom**: Use `["*"]` (open) since only localhost can reach the webhook
+- Only restrict `allowFrom` if exposing webhook publicly or in multi-tenant scenarios
 
-## Project Structure
+## Usage
+
+### 1. Start OpenClaw Gateway
+
+```bash
+openclaw gateway
+```
+
+The webhook will be available at: `http://localhost:18789/acp-channel/webhook`
+
+### 2. Send Messages to Agent
+
+POST messages to the webhook:
+
+```bash
+curl -X POST http://localhost:18789/acp-channel/webhook \
+  -H "Authorization: Bearer your-secret-token-here" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": "user-123",
+    "text": "Hello, what is 2+2?",
+    "messageId": "msg-001"
+  }'
+```
+
+### 3. Implement ACP Bridge
+
+Create a bridge server that:
+1. Receives messages from your client app via STDIO (ACP protocol)
+2. POSTs them to the OpenClaw webhook
+3. Receives replies from OpenClaw
+4. Sends replies back to client via STDIO
+
+See `src/bridge.ts` for a reference implementation.
+
+## Development
+
+### Build
+
+```bash
+npm install
+npm run build
+```
+
+### Test
+
+```bash
+npm test
+```
+
+### Project Structure
 
 ```
 openclaw-acp-channel/
 ├── src/
-│   ├── index.ts           # Plugin entry point
-│   ├── setup-entry.ts     # Setup entry
-│   ├── channel.ts         # Channel plugin implementation
-│   ├── bridge.ts          # ACP bridge (STDIO ↔ HTTP)
-│   └── types.ts           # TypeScript types
-├── scripts/
-│   ├── sync.sh            # Sync to Sprites
-│   ├── install.sh         # Install plugin
-│   ├── test-remote.sh     # Integration test
-│   ├── status.sh          # Check status
-│   └── uninstall.sh       # Uninstall plugin
+│   ├── index.ts        # Plugin entry point
+│   ├── channel.ts      # Channel implementation
+│   ├── bridge.ts       # Bridge reference implementation
+│   └── types.ts        # TypeScript types
+├── dist/               # Compiled JavaScript
+├── openclaw.plugin.json  # Plugin manifest
 ├── package.json
-├── openclaw.plugin.json   # Plugin manifest
 └── tsconfig.json
 ```
 
-## Testing in Sprites
+## How It Works
 
-The plugin is developed locally but tested in the Sprites testbed:
-
-1. **Sprites instance**: `openclaw-testbed`
-2. **OpenClaw**: Installed with Minimax model
-3. **Remote path**: `/tmp/acp-channel`
-4. **Gateway**: `ws://127.0.0.1:18789`
-
-## Next Steps
-
-1. Implement channel plugin core
-2. Implement ACP bridge (STDIO interface)
-3. Add webhook handlers
-4. Add outbound message sending
-5. Integration testing
-6. Documentation
+1. **Client app** sends ACP message via STDIO to bridge
+2. **Bridge** POSTs message to OpenClaw webhook with Bearer token
+3. **Plugin** receives message, validates token, checks allowFrom
+4. **OpenClaw agent** processes message, generates response
+5. **Plugin** calls bridge API with reply
+6. **Bridge** sends reply to client via STDIO
 
 ## License
 

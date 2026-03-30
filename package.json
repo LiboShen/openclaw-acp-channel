@@ -9,12 +9,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "bridge": "node dist/bridge.js",
-    "sync": "./scripts/sync.sh",
-    "sync:install": "./scripts/sync.sh && ./scripts/install.sh",
-    "test:remote": "./scripts/test-remote.sh",
-    "logs": "sprite -s openclaw-testbed exec -- openclaw logs --follow"
+    "test:watch": "vitest"
   },
   "openclaw": {
     "extensions": ["./dist/index.js"],
