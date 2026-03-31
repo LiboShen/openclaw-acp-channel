@@ -68,7 +68,7 @@ export const acpChannelPlugin = createChatChannelPlugin<ResolvedAccount>({
       threads: false,
       media: true,
       nativeCommands: false,
-      blockStreaming: false,
+      blockStreaming: true,
     },
     config: {
       resolveAccount,
