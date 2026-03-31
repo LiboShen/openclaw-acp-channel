@@ -14,6 +14,31 @@ import { readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
+function extractAssistantDelta(evt: any, streamedAssistantText: string): { nextText: string; delta: string } | null {
+  if (evt?.stream !== 'assistant' || !evt?.data || typeof evt.data !== 'object') return null;
+
+  const fullText = typeof evt.data.text === 'string' ? evt.data.text : undefined;
+  if (typeof fullText === 'string') {
+    const delta = fullText.startsWith(streamedAssistantText)
+      ? fullText.slice(streamedAssistantText.length)
+      : fullText;
+    return {
+      nextText: fullText,
+      delta,
+    };
+  }
+
+  const rawDelta = typeof evt.data.delta === 'string' ? evt.data.delta : undefined;
+  if (typeof rawDelta === 'string' && rawDelta.length > 0) {
+    return {
+      nextText: streamedAssistantText + rawDelta,
+      delta: rawDelta,
+    };
+  }
+
+  return null;
+}
+
 export default defineChannelPluginEntry({
   id: 'acp-channel',
   name: 'ACP Channel',
@@ -96,8 +121,27 @@ export default defineChannelPluginEntry({
           };
 
           const requestStartedAt = Date.now();
+          let streamedAssistantText = '';
           const unsubscribe = api.runtime.events.onAgentEvent((evt: any) => {
             if ((evt?.ts ?? 0) < requestStartedAt) return;
+
+            const assistantDelta = extractAssistantDelta(evt, streamedAssistantText);
+            if (assistantDelta && assistantDelta.delta) {
+              streamedAssistantText = assistantDelta.nextText;
+              void postToBridge({
+                to: payload.from,
+                sessionId: payload.sessionId,
+                update: {
+                  sessionUpdate: 'agent_message_chunk',
+                  content: {
+                    type: 'text',
+                    text: assistantDelta.delta,
+                  },
+                },
+              });
+              return;
+            }
+
             const update = mapAgentEventToAcpUpdate(evt);
             if (!update) return;
 
@@ -132,18 +176,23 @@ export default defineChannelPluginEntry({
                 },
                 deliver: async (replyPayload: any) => {
                   const text = replyPayload.text || '';
+                  const finalText = typeof text === 'string' ? text : '';
+                  const missingSuffix = streamedAssistantText && finalText.startsWith(streamedAssistantText)
+                    ? finalText.slice(streamedAssistantText.length)
+                    : finalText;
 
-                  console.log(`[acp-channel] Sending reply to bridge: ${text.substring(0, 50)}...`);
+                  console.log(`[acp-channel] Completing reply to bridge: ${finalText.substring(0, 50)}...`);
 
                   await postToBridge({
                     to: payload.from,
-                    text,
+                    ...(missingSuffix ? { text: missingSuffix } : {}),
                     inReplyTo: payload.messageId,
                     messageId: `reply-${Date.now()}`,
                     sessionId: payload.sessionId,
+                    complete: true,
                   });
 
-                  console.log(`[acp-channel] ✅ Reply sent to bridge`);
+                  console.log(`[acp-channel] ✅ Reply completion sent to bridge`);
                 },
                 onRecordError: (err: unknown) => {
                   console.error('[acp-channel] Record error:', err);

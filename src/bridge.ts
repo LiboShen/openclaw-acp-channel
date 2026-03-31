@@ -45,6 +45,7 @@ mkdirSync(SESSION_DIR, { recursive: true });
 interface SessionState {
   sessionId: string;
   messages: Array<{ role: string; content: string }>;
+  currentAssistantReply?: string;
   pendingReply?: {
     resolve: () => void;
     reject: (err: Error) => void;
@@ -59,6 +60,7 @@ interface BridgeReplyPayload {
   text?: string;
   sessionId?: string;
   update?: SessionUpdate;
+  complete?: boolean;
 }
 
 /**
@@ -182,6 +184,7 @@ class OpenClawChannelAgent implements Agent {
     // Store user message
     session.messages.push({ role: 'user', content: text });
     session.cancelled = false;
+    session.currentAssistantReply = '';
     this.persistSession(session);
 
     // Send to OpenClaw webhook
@@ -281,6 +284,14 @@ class OpenClawChannelAgent implements Agent {
           );
 
           if (session && reply.update) {
+            if (
+              reply.update.sessionUpdate === 'agent_message_chunk' &&
+              reply.update.content?.type === 'text' &&
+              typeof reply.update.content.text === 'string'
+            ) {
+              session.currentAssistantReply = (session.currentAssistantReply || '') + reply.update.content.text;
+            }
+
             await this.conn.sessionUpdate({
               sessionId: session.sessionId,
               update: reply.update,
@@ -288,10 +299,14 @@ class OpenClawChannelAgent implements Agent {
           }
 
           if (session && reply.text) {
+            const streamed = session.currentAssistantReply || '';
+            const textToEmit = streamed && reply.text.startsWith(streamed)
+              ? reply.text.slice(streamed.length)
+              : reply.text;
+
             // If session was cancelled, swallow late reply and do not emit it.
-            if (!session.cancelled) {
-              session.messages.push({ role: 'assistant', content: reply.text });
-              this.persistSession(session);
+            if (!session.cancelled && textToEmit) {
+              session.currentAssistantReply = (session.currentAssistantReply || '') + textToEmit;
 
               await this.conn.sessionUpdate({
                 sessionId: session.sessionId,
@@ -299,17 +314,35 @@ class OpenClawChannelAgent implements Agent {
                   sessionUpdate: 'agent_message_chunk',
                   content: {
                     type: 'text',
-                    text: reply.text,
+                    text: textToEmit,
                   },
                 },
               });
             }
+          }
+
+          if (session && reply.complete) {
+            if (!session.cancelled && session.currentAssistantReply) {
+              session.messages.push({ role: 'assistant', content: session.currentAssistantReply });
+              this.persistSession(session);
+            }
+            session.currentAssistantReply = '';
 
             if (session.pendingReply) {
               const pending = session.pendingReply;
               delete session.pendingReply;
               pending.resolve();
             }
+          } else if (session && reply.text && session.pendingReply) {
+            if (!session.cancelled) {
+              session.messages.push({ role: 'assistant', content: session.currentAssistantReply || reply.text });
+              this.persistSession(session);
+            }
+            session.currentAssistantReply = '';
+
+            const pending = session.pendingReply;
+            delete session.pendingReply;
+            pending.resolve();
           }
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
