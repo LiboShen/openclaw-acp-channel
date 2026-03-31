@@ -5,6 +5,14 @@ type AgentEventLike = {
   data?: Record<string, unknown>;
 };
 
+type ToolCallContentBlock = {
+  type: 'content';
+  content: {
+    type: 'text';
+    text: string;
+  };
+};
+
 function mapToolKind(toolName: string | undefined): 'read' | 'edit' | 'delete' | 'move' | 'search' | 'execute' | 'fetch' | 'other' {
   const name = toolName?.trim().toLowerCase() || '';
   if (!name) return 'other';
@@ -16,6 +24,54 @@ function mapToolKind(toolName: string | undefined): 'read' | 'edit' | 'delete' |
   if (name === 'bash' || name === 'exec' || name === 'process') return 'execute';
   if (name.includes('web') || name.includes('fetch') || name.includes('browser')) return 'fetch';
   return 'other';
+}
+
+function textToolContent(text: string): ToolCallContentBlock[] {
+  return [{
+    type: 'content',
+    content: {
+      type: 'text',
+      text,
+    },
+  }];
+}
+
+function asToolContent(value: unknown): ToolCallContentBlock[] | undefined {
+  if (typeof value === 'string') {
+    return textToolContent(value);
+  }
+
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const content = record.content;
+  if (Array.isArray(content)) {
+    const textParts = content
+      .filter((item): item is { type?: unknown; text?: unknown } => Boolean(item && typeof item === 'object'))
+      .map(item => {
+        if (item.type === 'text' && typeof item.text === 'string') {
+          return item.text;
+        }
+        return null;
+      })
+      .filter((item): item is string => typeof item === 'string');
+
+    if (textParts.length > 0) {
+      return textToolContent(textParts.join(''));
+    }
+  }
+
+  if (typeof record.text === 'string') {
+    return textToolContent(record.text);
+  }
+
+  try {
+    return textToolContent(JSON.stringify(value, null, 2));
+  } catch {
+    return undefined;
+  }
 }
 
 export function mapAgentEventToAcpUpdate(evt: AgentEventLike): SessionUpdate | null {
@@ -47,6 +103,7 @@ export function mapAgentEventToAcpUpdate(evt: AgentEventLike): SessionUpdate | n
       kind,
       status: 'in_progress',
       rawOutput: evt.data.partialResult,
+      content: asToolContent(evt.data.partialResult),
     };
   }
 
@@ -59,6 +116,7 @@ export function mapAgentEventToAcpUpdate(evt: AgentEventLike): SessionUpdate | n
       kind,
       status: isError ? 'failed' : 'completed',
       rawOutput: evt.data.result,
+      content: asToolContent(evt.data.result),
     };
   }
 

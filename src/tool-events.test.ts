@@ -41,6 +41,13 @@ describe('mapAgentEventToAcpUpdate', () => {
       kind: 'read',
       status: 'in_progress',
       rawOutput: { lineCount: 10 },
+      content: [{
+        type: 'content',
+        content: {
+          type: 'text',
+          text: '{\n  "lineCount": 10\n}',
+        },
+      }],
     });
   });
 
@@ -63,6 +70,52 @@ describe('mapAgentEventToAcpUpdate', () => {
       kind: 'search',
       status: 'completed',
       rawOutput: { matches: 3 },
+      content: [{
+        type: 'content',
+        content: {
+          type: 'text',
+          text: '{\n  "matches": 3\n}',
+        },
+      }],
+    });
+  });
+
+  it('extracts text content from structured tool outputs', () => {
+    const update = mapAgentEventToAcpUpdate({
+      stream: 'tool',
+      data: {
+        phase: 'result',
+        name: 'read',
+        toolCallId: 'tool-structured',
+        isError: false,
+        result: {
+          content: [
+            { type: 'text', text: 'hello\n' },
+            { type: 'text', text: 'world\n' },
+          ],
+        },
+      },
+    });
+
+    expect(update).toEqual({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tool-structured',
+      title: 'read completed',
+      kind: 'read',
+      status: 'completed',
+      rawOutput: {
+        content: [
+          { type: 'text', text: 'hello\n' },
+          { type: 'text', text: 'world\n' },
+        ],
+      },
+      content: [{
+        type: 'content',
+        content: {
+          type: 'text',
+          text: 'hello\nworld\n',
+        },
+      }],
     });
   });
 
@@ -85,6 +138,13 @@ describe('mapAgentEventToAcpUpdate', () => {
       kind: 'edit',
       status: 'failed',
       rawOutput: { error: 'permission denied' },
+      content: [{
+        type: 'content',
+        content: {
+          type: 'text',
+          text: '{\n  "error": "permission denied"\n}',
+        },
+      }],
     });
   });
 
