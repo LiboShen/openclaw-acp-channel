@@ -63,13 +63,24 @@ Bridge emits:
 
 Each ACP session has a stable `sessionId`.
 
-The bridge includes `sessionId` in webhook payloads, and the plugin derives a sender key from:
+The bridge includes `sessionId` in webhook payloads, and the plugin derives:
+
+- sender key
+- OpenClaw session key
+
+Sender key:
 
 ```text
 {userId}::{sessionId}
 ```
 
-This ensures different ACP sessions do not collide inside OpenClaw.
+OpenClaw session key:
+
+```text
+{routeSessionKey}:acp:{sessionId}
+```
+
+This ensures different ACP sessions do not collide inside OpenClaw, even when the base direct-message route would otherwise resolve to the same OpenClaw session.
 
 ## Reply Callback
 
@@ -125,6 +136,9 @@ This gives correct ACP behavior to the client even if upstream OpenClaw work is 
 - `session/prompt`
 - `session/cancel`
 - `session/update` notifications
+  - `agent_message_chunk`
+  - `tool_call`
+  - `tool_call_update`
 
 ## Message Formats
 
@@ -156,6 +170,11 @@ This gives correct ACP behavior to the client even if upstream OpenClaw work is 
   - prompt
   - load session replay
   - cancel prompt
+- `test/acp-jsonrpc-tools-e2e.mjs`
+  - real tool invocation
+  - `tool_call`
+  - `tool_call_update`
+  - final assistant reply
 
 ## Operational Notes
 

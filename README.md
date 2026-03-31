@@ -14,6 +14,8 @@ This plugin uses the `dispatchInboundDirectDmWithRuntime` API which is only avai
 - **HTTP webhook dispatch** - Bridge forwards prompts into OpenClaw
 - **Dynamic callback port** - Avoids fixed-port collisions across multiple processes
 - **Session management** - `session/new`, `session/load`, `session/prompt`, `session/cancel`
+- **Session isolation** - Each ACP session maps to a distinct OpenClaw session key
+- **Tool-call updates** - Emits ACP `tool_call` and `tool_call_update`
 - **Session replay** - Persisted session history supports `session/load`
 - **Security** - Bearer token authentication between bridge and plugin
 
@@ -164,6 +166,8 @@ npm run build
 
 ```bash
 npm test
+npm run test:acp
+ACP_API_TOKEN=your-secret-token-here OPENCLAW_WEBHOOK_URL=http://127.0.0.1:18789/acp-channel/webhook npm run test:acp:tools
 ```
 
 ### Project Structure
