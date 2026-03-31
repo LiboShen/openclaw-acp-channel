@@ -9,6 +9,7 @@ import { dispatchInboundDirectDmWithRuntime } from 'openclaw/plugin-sdk/channel-
 import { acpChannelPlugin } from './channel.js';
 import type { WebhookPayload } from './types.js';
 import { mapAgentEventToAcpUpdate } from './tool-events.js';
+import { extractReasoningDelta } from './reasoning-events.js';
 import { buildOpenClawSessionKey } from './session-key.js';
 import { readFileSync } from 'fs';
 import { homedir } from 'os';
@@ -122,6 +123,7 @@ export default defineChannelPluginEntry({
 
           const requestStartedAt = Date.now();
           let streamedAssistantText = '';
+          let streamedReasoningText = '';
           const unsubscribe = api.runtime.events.onAgentEvent((evt: any) => {
             if ((evt?.ts ?? 0) < requestStartedAt) return;
 
@@ -136,6 +138,23 @@ export default defineChannelPluginEntry({
                   content: {
                     type: 'text',
                     text: assistantDelta.delta,
+                  },
+                },
+              });
+              return;
+            }
+
+            const reasoningDelta = extractReasoningDelta(evt, streamedReasoningText);
+            if (reasoningDelta && reasoningDelta.delta) {
+              streamedReasoningText = reasoningDelta.nextText;
+              void postToBridge({
+                to: payload.from,
+                sessionId: payload.sessionId,
+                update: {
+                  sessionUpdate: 'agent_thought_chunk',
+                  content: {
+                    type: 'text',
+                    text: reasoningDelta.delta,
                   },
                 },
               });
