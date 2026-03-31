@@ -108,59 +108,66 @@ export default defineChannelPluginEntry({
             });
           });
 
-          try {
-            await dispatchInboundDirectDmWithRuntime({
-              cfg: config,
-              runtime: api.runtime,
-              channel: 'acp-channel',
-              channelLabel: 'ACP Channel',
-              accountId: route.accountId ?? null,
-              peer: { kind: 'direct', id: senderKey },
-              senderId: senderKey,
-              senderAddress: senderKey,
-              recipientAddress: 'agent',
-              conversationLabel: payload.sessionId ? `ACP session ${payload.sessionId}` : `DM with ${payload.from}`,
-              rawBody: payload.text,
-              messageId: payload.messageId,
-              timestamp: payload.timestamp || Date.now(),
-              extraContext: {
-                SessionKey: openClawSessionKey,
-              },
-              deliver: async (replyPayload: any) => {
-                const text = replyPayload.text || '';
-
-                console.log(`[acp-channel] Sending reply to bridge: ${text.substring(0, 50)}...`);
-
-                await postToBridge({
-                  to: payload.from,
-                  text,
-                  inReplyTo: payload.messageId,
-                  messageId: `reply-${Date.now()}`,
-                  sessionId: payload.sessionId,
-                });
-
-                console.log(`[acp-channel] ✅ Reply sent to bridge`);
-              },
-              onRecordError: (err: unknown) => {
-                console.error('[acp-channel] Record error:', err);
-              },
-              onDispatchError: (err: unknown, info: { kind: string }) => {
-                console.error(`[acp-channel] Dispatch error (${info.kind}):`, err);
-              },
-            });
-          } finally {
-            unsubscribe?.();
-          }
-          
-          console.log('[acp-channel] ✅ Message dispatched to OpenClaw agent');
-          
           res.statusCode = 200;
           res.end('ok');
+
+          void (async () => {
+            try {
+              await dispatchInboundDirectDmWithRuntime({
+                cfg: config,
+                runtime: api.runtime,
+                channel: 'acp-channel',
+                channelLabel: 'ACP Channel',
+                accountId: route.accountId ?? null,
+                peer: { kind: 'direct', id: senderKey },
+                senderId: senderKey,
+                senderAddress: senderKey,
+                recipientAddress: 'agent',
+                conversationLabel: payload.sessionId ? `ACP session ${payload.sessionId}` : `DM with ${payload.from}`,
+                rawBody: payload.text,
+                messageId: payload.messageId,
+                timestamp: payload.timestamp || Date.now(),
+                extraContext: {
+                  SessionKey: openClawSessionKey,
+                },
+                deliver: async (replyPayload: any) => {
+                  const text = replyPayload.text || '';
+
+                  console.log(`[acp-channel] Sending reply to bridge: ${text.substring(0, 50)}...`);
+
+                  await postToBridge({
+                    to: payload.from,
+                    text,
+                    inReplyTo: payload.messageId,
+                    messageId: `reply-${Date.now()}`,
+                    sessionId: payload.sessionId,
+                  });
+
+                  console.log(`[acp-channel] ✅ Reply sent to bridge`);
+                },
+                onRecordError: (err: unknown) => {
+                  console.error('[acp-channel] Record error:', err);
+                },
+                onDispatchError: (err: unknown, info: { kind: string }) => {
+                  console.error(`[acp-channel] Dispatch error (${info.kind}):`, err);
+                },
+              });
+
+              console.log('[acp-channel] ✅ Message dispatched to OpenClaw agent');
+            } catch (error) {
+              console.error('[acp-channel] ❌ Async dispatch failed:', error);
+            } finally {
+              unsubscribe?.();
+            }
+          })();
+
           return true;
         } catch (error) {
           console.error('[acp-channel] ❌ Webhook error:', error);
-          res.statusCode = 500;
-          res.end('Internal server error');
+          if (!res.writableEnded) {
+            res.statusCode = 500;
+            res.end('Internal server error');
+          }
           return true;
         }
       },
