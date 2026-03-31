@@ -99,25 +99,24 @@ async function main() {
       x.params?.update?.status === 'completed'
     ), 60000);
 
-    const answer = await waitFor(() => bridge.lines().find(x =>
+    const promptRes = await waitFor(() => bridge.lines().find(x => x.id === 3 && x.result), 60000);
+
+    const answerText = bridge.lines().filter(x =>
       x.method === 'session/update' &&
       x.params?.sessionId === sessionId &&
       x.params?.update?.sessionUpdate === 'agent_message_chunk' &&
-      typeof x.params?.update?.content?.text === 'string' &&
-      x.params.update.content.text.includes(token)
-    ), 60000);
-
-    const promptRes = await waitFor(() => bridge.lines().find(x => x.id === 3 && x.result), 60000);
+      typeof x.params?.update?.content?.text === 'string'
+    ).map(x => x.params.update.content.text).join('');
 
     if (toolStart.params.update.kind !== 'read') throw new Error('Expected read tool kind');
     if (toolEnd.params.update.toolCallId !== toolStart.params.update.toolCallId) throw new Error('Tool call IDs did not match');
-    if (answer.params.update.content.text.trim() !== token) throw new Error('Final answer did not match token');
+    if (answerText.trim() !== token) throw new Error('Final answer did not match token');
     if (promptRes.result.stopReason !== 'end_turn') throw new Error('Prompt did not end_turn');
 
     console.log('✅ ACP tool-call E2E passed');
     console.log(`  token: ${token}`);
     console.log(`  toolCallId: ${toolStart.params.update.toolCallId}`);
-    console.log(`  final answer: ${answer.params.update.content.text.trim()}`);
+    console.log(`  final answer: ${answerText.trim()}`);
 
     bridge.child.kill('SIGTERM');
   } catch (err) {
