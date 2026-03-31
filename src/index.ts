@@ -8,6 +8,8 @@ import { defineChannelPluginEntry } from 'openclaw/plugin-sdk/core';
 import { dispatchInboundDirectDmWithRuntime } from 'openclaw/plugin-sdk/channel-inbound';
 import { acpChannelPlugin } from './channel.js';
 import type { WebhookPayload } from './types.js';
+import { mapAgentEventToAcpUpdate } from './tool-events.js';
+import { buildOpenClawSessionKey } from './session-key.js';
 import { readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -62,63 +64,93 @@ export default defineChannelPluginEntry({
           const payload: WebhookPayload & { bridgeUrl?: string; sessionId?: string } = JSON.parse(body);
           
           console.log(`[acp-channel] ✅ Received message from ${payload.from}: ${payload.text.substring(0, 50)}...`);
-          
+
           // Dispatch to OpenClaw using the proper SDK function
           const senderKey = payload.sessionId ? `${payload.from}::${payload.sessionId}` : payload.from;
-
-          await dispatchInboundDirectDmWithRuntime({
+          const bridgeUrl = payload.bridgeUrl || channelConfig?.bridgeUrl || 'http://127.0.0.1:3000';
+          const route = api.runtime.channel.routing.resolveAgentRoute({
             cfg: config,
-            runtime: api.runtime,
             channel: 'acp-channel',
-            channelLabel: 'ACP Channel',
             accountId: null,
-            peer: { type: 'dm' },
-            senderId: senderKey,
-            senderAddress: senderKey,
-            recipientAddress: 'agent',
-            conversationLabel: payload.sessionId ? `ACP session ${payload.sessionId}` : `DM with ${payload.from}`,
-            rawBody: payload.text,
-            messageId: payload.messageId,
-            timestamp: payload.timestamp || Date.now(),
-            deliver: async (replyPayload: any) => {
-              // Send reply back to bridge. Prefer per-request callback URL to avoid port collisions.
-              const bridgeUrl = payload.bridgeUrl || channelConfig?.bridgeUrl || 'http://127.0.0.1:3000';
-              const text = replyPayload.text || '';
-              
-              console.log(`[acp-channel] Sending reply to bridge: ${text.substring(0, 50)}...`);
-              
-              try {
-                const response = await fetch(`${bridgeUrl}/reply`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${expectedToken}`,
-                  },
-                  body: JSON.stringify({
-                    to: payload.from,
-                    text: text,
-                    inReplyTo: payload.messageId,
-                    messageId: `reply-${Date.now()}`,
-                    sessionId: payload.sessionId,
-                  }),
-                });
-                
-                if (!response.ok) {
-                  console.error(`[acp-channel] Bridge reply failed: ${response.status}`);
-                } else {
-                  console.log(`[acp-channel] ✅ Reply sent to bridge`);
-                }
-              } catch (error) {
-                console.error(`[acp-channel] Failed to send reply to bridge:`, error);
-              }
-            },
-            onRecordError: (err: unknown) => {
-              console.error('[acp-channel] Record error:', err);
-            },
-            onDispatchError: (err: unknown, info: { kind: string }) => {
-              console.error(`[acp-channel] Dispatch error (${info.kind}):`, err);
-            },
+            peer: { kind: 'direct', id: senderKey },
           });
+          const openClawSessionKey = buildOpenClawSessionKey(route.sessionKey, payload.sessionId);
+
+          const postToBridge = async (body: Record<string, unknown>) => {
+            try {
+              const response = await fetch(`${bridgeUrl}/reply`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${expectedToken}`,
+                },
+                body: JSON.stringify(body),
+              });
+
+              if (!response.ok) {
+                console.error(`[acp-channel] Bridge callback failed: ${response.status}`);
+              }
+            } catch (error) {
+              console.error(`[acp-channel] Failed bridge callback:`, error);
+            }
+          };
+
+          const requestStartedAt = Date.now();
+          const unsubscribe = api.runtime.events.onAgentEvent((evt: any) => {
+            if ((evt?.ts ?? 0) < requestStartedAt) return;
+            const update = mapAgentEventToAcpUpdate(evt);
+            if (!update) return;
+
+            void postToBridge({
+              to: payload.from,
+              sessionId: payload.sessionId,
+              update,
+            });
+          });
+
+          try {
+            await dispatchInboundDirectDmWithRuntime({
+              cfg: config,
+              runtime: api.runtime,
+              channel: 'acp-channel',
+              channelLabel: 'ACP Channel',
+              accountId: route.accountId ?? null,
+              peer: { kind: 'direct', id: senderKey },
+              senderId: senderKey,
+              senderAddress: senderKey,
+              recipientAddress: 'agent',
+              conversationLabel: payload.sessionId ? `ACP session ${payload.sessionId}` : `DM with ${payload.from}`,
+              rawBody: payload.text,
+              messageId: payload.messageId,
+              timestamp: payload.timestamp || Date.now(),
+              extraContext: {
+                SessionKey: openClawSessionKey,
+              },
+              deliver: async (replyPayload: any) => {
+                const text = replyPayload.text || '';
+
+                console.log(`[acp-channel] Sending reply to bridge: ${text.substring(0, 50)}...`);
+
+                await postToBridge({
+                  to: payload.from,
+                  text,
+                  inReplyTo: payload.messageId,
+                  messageId: `reply-${Date.now()}`,
+                  sessionId: payload.sessionId,
+                });
+
+                console.log(`[acp-channel] ✅ Reply sent to bridge`);
+              },
+              onRecordError: (err: unknown) => {
+                console.error('[acp-channel] Record error:', err);
+              },
+              onDispatchError: (err: unknown, info: { kind: string }) => {
+                console.error(`[acp-channel] Dispatch error (${info.kind}):`, err);
+              },
+            });
+          } finally {
+            unsubscribe?.();
+          }
           
           console.log('[acp-channel] ✅ Message dispatched to OpenClaw agent');
           

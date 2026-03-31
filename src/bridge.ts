@@ -52,6 +52,13 @@ interface SessionState {
   cancelled?: boolean;
 }
 
+interface BridgeReplyPayload {
+  to?: string;
+  text?: string;
+  sessionId?: string;
+  update?: SessionUpdate;
+}
+
 /**
  * ACP Agent implementation for OpenClaw channel.
  */
@@ -256,12 +263,19 @@ class OpenClawChannelAgent implements Agent {
             chunks.push(chunk as Buffer);
           }
           const body = Buffer.concat(chunks).toString();
-          const reply = JSON.parse(body);
+          const reply = JSON.parse(body) as BridgeReplyPayload;
 
           // Find session
           const session = Array.from(this.sessions.values()).find(s => 
             reply.sessionId === s.sessionId || reply.to === USER_ID
           );
+
+          if (session && reply.update) {
+            await this.conn.sessionUpdate({
+              sessionId: session.sessionId,
+              update: reply.update,
+            });
+          }
 
           if (session && reply.text) {
             // If session was cancelled, swallow late reply and do not emit it.

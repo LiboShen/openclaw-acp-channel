@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:acp": "node test/acp-jsonrpc-e2e.mjs",
+    "test:acp:tools": "node test/acp-jsonrpc-tools-e2e.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
   },
