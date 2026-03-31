@@ -49,7 +49,6 @@ interface SessionState {
     resolve: () => void;
     reject: (err: Error) => void;
     cancelled?: boolean;
-    timer?: NodeJS.Timeout;
     settled?: boolean;
   };
   cancelled?: boolean;
@@ -196,25 +195,16 @@ class OpenClawChannelAgent implements Agent {
           resolve: () => {
             if (pending.settled) return;
             pending.settled = true;
-            if (pending.timer) clearTimeout(pending.timer);
             resolve();
           },
           reject: (err: Error) => {
             if (pending.settled) return;
             pending.settled = true;
-            if (pending.timer) clearTimeout(pending.timer);
             reject(err);
           },
           cancelled: false,
           settled: false,
         };
-
-        pending.timer = setTimeout(() => {
-          if (session.pendingReply === pending) {
-            delete session.pendingReply;
-          }
-          pending.reject(new Error('Timeout waiting for reply'));
-        }, 60000);
       });
 
       const response = await fetch(OPENCLAW_WEBHOOK_URL, {
@@ -234,11 +224,7 @@ class OpenClawChannelAgent implements Agent {
       });
 
       if (!response.ok) {
-        if (session.pendingReply) {
-          const pending = session.pendingReply;
-          delete session.pendingReply;
-          pending.reject(new Error(`Webhook failed: ${response.status}`));
-        }
+        delete session.pendingReply;
         throw new Error(`Webhook failed: ${response.status}`);
       }
 
@@ -247,6 +233,7 @@ class OpenClawChannelAgent implements Agent {
 
       return { stopReason: session.cancelled ? 'cancelled' : 'end_turn' };
     } catch (error) {
+      delete session.pendingReply;
       console.error('[bridge] Error sending to OpenClaw:', error);
       throw new Error('Failed to send prompt to OpenClaw');
     }
