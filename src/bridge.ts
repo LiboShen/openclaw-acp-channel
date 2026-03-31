@@ -38,6 +38,7 @@ const OPENCLAW_WEBHOOK_URL = process.env.OPENCLAW_WEBHOOK_URL || 'http://127.0.0
 const API_TOKEN = process.env.ACP_API_TOKEN || 'default-token';
 const USER_ID = process.env.ACP_USER_ID || 'default-user';
 const SESSION_DIR = process.env.ACP_SESSION_DIR || join(homedir(), '.openclaw', 'acp-channel-sessions');
+const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version || '0.4.0';
 
 mkdirSync(SESSION_DIR, { recursive: true });
 
@@ -48,6 +49,8 @@ interface SessionState {
     resolve: () => void;
     reject: (err: Error) => void;
     cancelled?: boolean;
+    timer?: NodeJS.Timeout;
+    settled?: boolean;
   };
   cancelled?: boolean;
 }
@@ -103,7 +106,7 @@ class OpenClawChannelAgent implements Agent {
       agentInfo: {
         name: 'openclaw-acp-channel',
         title: 'OpenClaw ACP Channel',
-        version: '0.3.0',
+        version: PACKAGE_VERSION,
       },
       agentCapabilities: {
         loadSession: true,
@@ -189,13 +192,28 @@ class OpenClawChannelAgent implements Agent {
 
       // Register pending reply BEFORE sending, to avoid race if reply arrives fast
       const replyPromise = new Promise<void>((resolve, reject) => {
-        session.pendingReply = { resolve, reject, cancelled: false };
+        const pending: NonNullable<SessionState['pendingReply']> = session.pendingReply = {
+          resolve: () => {
+            if (pending.settled) return;
+            pending.settled = true;
+            if (pending.timer) clearTimeout(pending.timer);
+            resolve();
+          },
+          reject: (err: Error) => {
+            if (pending.settled) return;
+            pending.settled = true;
+            if (pending.timer) clearTimeout(pending.timer);
+            reject(err);
+          },
+          cancelled: false,
+          settled: false,
+        };
 
-        setTimeout(() => {
-          if (session.pendingReply) {
+        pending.timer = setTimeout(() => {
+          if (session.pendingReply === pending) {
             delete session.pendingReply;
-            reject(new Error('Timeout waiting for reply'));
           }
+          pending.reject(new Error('Timeout waiting for reply'));
         }, 60000);
       });
 
@@ -216,7 +234,11 @@ class OpenClawChannelAgent implements Agent {
       });
 
       if (!response.ok) {
-        delete session.pendingReply;
+        if (session.pendingReply) {
+          const pending = session.pendingReply;
+          delete session.pendingReply;
+          pending.reject(new Error(`Webhook failed: ${response.status}`));
+        }
         throw new Error(`Webhook failed: ${response.status}`);
       }
 
@@ -243,9 +265,10 @@ class OpenClawChannelAgent implements Agent {
     // Best-effort local cancel: resolve pending prompt immediately.
     // We currently do not propagate abort into OpenClaw core.
     if (session.pendingReply) {
-      session.pendingReply.cancelled = true;
-      session.pendingReply.resolve();
+      const pending = session.pendingReply;
+      pending.cancelled = true;
       delete session.pendingReply;
+      pending.resolve();
     }
   }
 
@@ -296,8 +319,9 @@ class OpenClawChannelAgent implements Agent {
             }
 
             if (session.pendingReply) {
-              session.pendingReply.resolve();
+              const pending = session.pendingReply;
               delete session.pendingReply;
+              pending.resolve();
             }
           }
 
