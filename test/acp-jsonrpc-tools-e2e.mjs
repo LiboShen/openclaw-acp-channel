@@ -12,7 +12,6 @@ function createBridge() {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      ACP_API_TOKEN: process.env.ACP_API_TOKEN,
       ACP_USER_ID: process.env.ACP_USER_ID || 'test-user',
       OPENCLAW_WEBHOOK_URL: process.env.OPENCLAW_WEBHOOK_URL || 'http://127.0.0.1:18789/acp-channel/webhook',
     },
@@ -49,11 +48,6 @@ async function waitFor(predicate, timeoutMs = 30000, intervalMs = 200) {
 }
 
 async function main() {
-  if (!process.env.ACP_API_TOKEN) {
-    console.error('ACP_API_TOKEN is required for test/acp-jsonrpc-tools-e2e.mjs');
-    process.exit(2);
-  }
-
   const token = randomBytes(8).toString('hex');
   const proofPath = '/tmp/acp-jsonrpc-tools-proof.txt';
   writeFileSync(proofPath, token + '\n');

@@ -11,9 +11,6 @@ import type { WebhookPayload } from './types.js';
 import { mapAgentEventToAcpUpdate } from './tool-events.js';
 import { extractReasoningDelta } from './reasoning-events.js';
 import { buildOpenClawSessionKey } from './session-key.js';
-import { readFileSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
 
 function extractAssistantDelta(evt: any, streamedAssistantText: string): { nextText: string; delta: string } | null {
   if (evt?.stream !== 'assistant' || !evt?.data || typeof evt.data !== 'object') return null;
@@ -57,28 +54,20 @@ export default defineChannelPluginEntry({
       
       handler: async (req: any, res: any) => {
         try {
-          // Read config from file (respects OPENCLAW_CONFIG_PATH env var)
-          const configPath = process.env.OPENCLAW_CONFIG_PATH || join(homedir(), '.openclaw', 'openclaw.json');
-          let configContent = readFileSync(configPath, 'utf-8');
-          
-          // Strip // comments (JSONC format)
-          configContent = configContent
-            .split('\n')
-            .filter(line => !line.trim().startsWith('//'))
-            .join('\n');
-          
-          const config = JSON.parse(configContent);
+          // Load resolved OpenClaw config via runtime API
+          const config = await api.runtime.config.loadConfig();
           const channelConfig = config?.channels?.['acp-channel'];
-          const expectedToken = channelConfig?.apiToken || 'default-token';
+          const expectedToken = channelConfig?.apiToken;
           
-          // Verify authorization token
-          const authHeader = req.headers.authorization;
-          
-          if (authHeader !== `Bearer ${expectedToken}`) {
-            console.error(`[acp-channel] Unauthorized: expected "Bearer ${expectedToken}", got "${authHeader}"`);
-            res.statusCode = 401;
-            res.end('Unauthorized');
-            return true;
+          // Verify authorization token (only if token is configured)
+          if (expectedToken) {
+            const authHeader = req.headers.authorization;
+            if (authHeader !== `Bearer ${expectedToken}`) {
+              console.error(`[acp-channel] Unauthorized: expected "Bearer ${expectedToken}", got "${authHeader}"`);
+              res.statusCode = 401;
+              res.end('Unauthorized');
+              return true;
+            }
           }
           
           // Parse request body
@@ -108,7 +97,6 @@ export default defineChannelPluginEntry({
                 method: 'POST',
                 headers: {
                   'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${expectedToken}`,
                 },
                 body: JSON.stringify(body),
               });

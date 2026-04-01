@@ -10,7 +10,6 @@ function createBridge() {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      ACP_API_TOKEN: process.env.ACP_API_TOKEN || 'test-token-123',
       ACP_USER_ID: process.env.ACP_USER_ID || 'test-user',
     },
     stdio: ['pipe', 'pipe', 'pipe'],

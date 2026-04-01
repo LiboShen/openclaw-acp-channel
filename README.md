@@ -90,8 +90,6 @@ Add to your OpenClaw config file (`~/.openclaw/openclaw.json` or your `OPENCLAW_
   "channels": {
     "acp-channel": {
       "enabled": true,
-      "apiToken": "your-secret-token-here",
-      "bridgeUrl": "http://127.0.0.1:3000",
       "allowFrom": ["*"]
     }
   }
@@ -100,16 +98,16 @@ Add to your OpenClaw config file (`~/.openclaw/openclaw.json` or your `OPENCLAW_
 
 ### Configuration Options
 
-- **apiToken** (required): Bearer token for bridge ↔ plugin authentication
+- **apiToken** (optional): Bearer token for bridge ↔ plugin authentication. Not needed for localhost-only usage since the webhook is only accessible on 127.0.0.1.
 - **bridgeUrl** (optional): fallback reply URL. In normal operation the bridge sends a per-request dynamic `bridgeUrl`, which overrides this value.
 - **allowFrom** (optional): User ID allowlist (default: `["*"]` - open to all)
 
 ### Security Notes
 
-For localhost bridges:
-- **apiToken**: Primary security - keep this secret between your app and OpenClaw
+For localhost bridges (default):
+- **apiToken**: Not required — the webhook is bound to loopback (127.0.0.1) so only local processes can reach it
 - **allowFrom**: Use `["*"]` (open) since only localhost can reach the webhook
-- Only restrict `allowFrom` if exposing webhook publicly or in multi-tenant scenarios
+- Add `apiToken` only if exposing webhook publicly or needing extra auth layer
 
 ## Usage
 
@@ -124,7 +122,7 @@ The webhook will be available at: `http://localhost:18789/acp-channel/webhook`
 ### 2. Run the ACP Bridge
 
 ```bash
-ACP_API_TOKEN=your-secret-token-here node dist/bridge.js
+node dist/bridge.js
 ```
 
 The bridge speaks ACP JSON-RPC over STDIO.
@@ -167,7 +165,7 @@ npm run build
 ```bash
 npm test
 npm run test:acp
-ACP_API_TOKEN=your-secret-token-here OPENCLAW_WEBHOOK_URL=http://127.0.0.1:18789/acp-channel/webhook npm run test:acp:tools
+OPENCLAW_WEBHOOK_URL=http://127.0.0.1:18789/acp-channel/webhook npm run test:acp:tools
 ```
 
 ### Project Structure

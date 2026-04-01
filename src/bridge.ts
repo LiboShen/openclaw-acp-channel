@@ -35,7 +35,6 @@ import { join } from 'path';
 
 // Configuration from environment
 const OPENCLAW_WEBHOOK_URL = process.env.OPENCLAW_WEBHOOK_URL || 'http://127.0.0.1:18789/acp-channel/webhook';
-const API_TOKEN = process.env.ACP_API_TOKEN || 'default-token';
 const USER_ID = process.env.ACP_USER_ID || 'default-user';
 const SESSION_DIR = process.env.ACP_SESSION_DIR || join(homedir(), '.openclaw', 'acp-channel-sessions');
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version || '0.4.0';
@@ -214,7 +213,6 @@ class OpenClawChannelAgent implements Agent {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${API_TOKEN}`,
         },
         body: JSON.stringify({
           from: USER_ID,
