@@ -29,21 +29,15 @@ import {
 } from '@agentclientprotocol/sdk';
 import { randomUUID } from 'crypto';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
-import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
+import { readFileSync } from 'fs';
 
-// Configuration from environment
-const OPENCLAW_WEBHOOK_URL = process.env.OPENCLAW_WEBHOOK_URL || 'http://127.0.0.1:18789/acp-channel/webhook';
-const USER_ID = process.env.ACP_USER_ID || 'default-user';
-const SESSION_DIR = process.env.ACP_SESSION_DIR || join(homedir(), '.openclaw', 'acp-channel-sessions');
+// Configuration - hardcoded for localhost usage
+const OPENCLAW_WEBHOOK_URL = 'http://127.0.0.1:18789/acp-channel/webhook';
+const USER_ID = 'acp-bridge';
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf-8')).version || '0.4.0';
-
-mkdirSync(SESSION_DIR, { recursive: true });
 
 interface SessionState {
   sessionId: string;
-  messages: Array<{ role: string; content: string }>;
   currentAssistantReply?: string;
   pendingReply?: {
     resolve: () => void;
@@ -77,26 +71,7 @@ class OpenClawChannelAgent implements Agent {
     this.startReplyServer();
   }
 
-  private sessionPath(sessionId: string): string {
-    return join(SESSION_DIR, `${sessionId}.json`);
-  }
 
-  private persistSession(session: SessionState): void {
-    writeFileSync(this.sessionPath(session.sessionId), JSON.stringify({
-      sessionId: session.sessionId,
-      messages: session.messages,
-    }, null, 2));
-  }
-
-  private loadPersistedSession(sessionId: string): SessionState | null {
-    const path = this.sessionPath(sessionId);
-    if (!existsSync(path)) return null;
-    const raw = JSON.parse(readFileSync(path, 'utf-8')) as { sessionId: string; messages: Array<{ role: string; content: string }> };
-    return {
-      sessionId: raw.sessionId,
-      messages: raw.messages || [],
-    };
-  }
 
   async initialize(_params: InitializeRequest): Promise<InitializeResponse> {
     this.initialized = true;
@@ -117,14 +92,8 @@ class OpenClawChannelAgent implements Agent {
   async newSession(_params: NewSessionRequest): Promise<NewSessionResponse> {
     const sessionId = randomUUID();
 
-    const session: SessionState = {
-      sessionId,
-      messages: [],
-    };
-
+    const session: SessionState = { sessionId };
     this.sessions.set(sessionId, session);
-    this.persistSession(session);
-
     return { sessionId };
   }
 
@@ -134,30 +103,11 @@ class OpenClawChannelAgent implements Agent {
       throw new Error('sessionId required');
     }
 
-    // Get from memory or disk
-    let session = this.sessions.get(sessionId) || this.loadPersistedSession(sessionId);
+    // Just create in-memory session state - OpenClaw has the actual history
+    let session = this.sessions.get(sessionId);
     if (!session) {
-      session = {
-        sessionId,
-        messages: [],
-      };
-    }
-    this.sessions.set(sessionId, session);
-
-    // Replay assistant history as session updates
-    for (const msg of session.messages) {
-      if (msg.role === 'assistant') {
-        await this.conn.sessionUpdate({
-          sessionId,
-          update: {
-            sessionUpdate: 'agent_message_chunk',
-            content: {
-              type: 'text',
-              text: msg.content,
-            },
-          },
-        });
-      }
+      session = { sessionId };
+      this.sessions.set(sessionId, session);
     }
 
     return {};
@@ -180,11 +130,8 @@ class OpenClawChannelAgent implements Agent {
       throw new Error('Empty prompt');
     }
 
-    // Store user message
-    session.messages.push({ role: 'user', content: text });
     session.cancelled = false;
     session.currentAssistantReply = '';
-    this.persistSession(session);
 
     // Send to OpenClaw webhook
     try {
@@ -320,24 +267,14 @@ class OpenClawChannelAgent implements Agent {
           }
 
           if (session && reply.complete) {
-            if (!session.cancelled && session.currentAssistantReply) {
-              session.messages.push({ role: 'assistant', content: session.currentAssistantReply });
-              this.persistSession(session);
-            }
             session.currentAssistantReply = '';
-
             if (session.pendingReply) {
               const pending = session.pendingReply;
               delete session.pendingReply;
               pending.resolve();
             }
           } else if (session && reply.text && session.pendingReply) {
-            if (!session.cancelled) {
-              session.messages.push({ role: 'assistant', content: session.currentAssistantReply || reply.text });
-              this.persistSession(session);
-            }
             session.currentAssistantReply = '';
-
             const pending = session.pendingReply;
             delete session.pendingReply;
             pending.resolve();
