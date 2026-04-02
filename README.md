@@ -98,16 +98,11 @@ Add to your OpenClaw config file (`~/.openclaw/openclaw.json` or your `OPENCLAW_
 
 ### Configuration Options
 
-- **apiToken** (optional): Bearer token for bridge ↔ plugin authentication. Not needed for localhost-only usage since the webhook is only accessible on 127.0.0.1.
-- **bridgeUrl** (optional): fallback reply URL. In normal operation the bridge sends a per-request dynamic `bridgeUrl`, which overrides this value.
 - **allowFrom** (optional): User ID allowlist (default: `["*"]` - open to all)
 
 ### Security Notes
 
-For localhost bridges (default):
-- **apiToken**: Not required — the webhook is bound to loopback (127.0.0.1) so only local processes can reach it
-- **allowFrom**: Use `["*"]` (open) since only localhost can reach the webhook
-- Add `apiToken` only if exposing webhook publicly or needing extra auth layer
+The webhook is bound to loopback (127.0.0.1) so only local processes can reach it. No authentication token is needed for localhost usage.
 
 ## Usage
 
